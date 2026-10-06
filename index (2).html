@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard สถานการณ์โควิด-19 ประเทศไทย</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Sarabun', 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        #map { 
+            height: 500px; 
+            width: 100%;
+            border-radius: 0.5rem;
+            z-index: 1;
+        }
+        .info {
+            padding: 6px 8px;
+            font: 14px/16px Arial, Helvetica, sans-serif;
+            background: white;
+            background: rgba(255,255,255,0.9);
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            border-radius: 5px;
+        }
+        .info h4 {
+            margin: 0 0 5px;
+            color: #777;
+        }
+        .legend {
+            line-height: 18px;
+            color: #555;
+        }
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+        /* Loading Overlay */
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            display: none;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #09f;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="text-gray-800">
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <p class="mt-4 text-lg font-semibold text-gray-700">กำลังประมวลผลข้อมูล...</p>
+    </div>
+
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <header class="mb-8 text-center sm:text-left flex flex-col sm:flex-row justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-blue-800 mb-2">Dashboard สถานการณ์โควิด-19 ประเทศไทย</h1>
+                <p class="text-gray-600">วิเคราะห์ข้อมูลการกระจายตัวของผู้ติดเชื้อรายจังหวัด</p>
+            </div>
+            <div class="mt-4 sm:mt-0 bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                <label for="excelFile" class="block text-sm font-medium text-gray-700 mb-2">อัปโหลดไฟล์ข้อมูล (confirmed-cases-since-120465 (1).xlsx)</label>
+                <input type="file" id="excelFile" accept=".xlsx, .xls, .csv" class="block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-md file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-blue-50 file:text-blue-700
+                    hover:file:bg-blue-100
+                "/>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8" id="summary-cards">
+            <div class="bg-white rounded-xl shadow-md p-6 border-l-4 border-blue-500">
+                <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">ผู้ติดเชื้อสะสม (จากไฟล์)</h2>
+                <p class="text-3xl font-bold text-blue-700 mt-2" id="total-cases">-</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-md p-6 border-l-4 border-red-500">
+                <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">จังหวัดที่พบผู้ติดเชื้อมากที่สุด</h2>
+                <p class="text-3xl font-bold text-red-600 mt-2" id="max-province">-</p>
+                <p class="text-sm text-gray-500 mt-1" id="max-province-cases"></p>
+            </div>
+            <div class="bg-white rounded-xl shadow-md p-6 border-l-4 border-green-500">
+                <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">ช่วงอายุที่พบมากที่สุด (เฉลี่ย)</h2>
+                <p class="text-3xl font-bold text-green-600 mt-2" id="avg-age">-</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-white rounded-xl shadow-md p-4">
+                <h2 class="text-xl font-semibold mb-4 text-gray-700">แผนที่การกระจายตัวของผู้ติดเชื้อ</h2>
+                <div id="map" class="border border-gray-200"></div>
+                <p class="text-xs text-gray-500 mt-2">* อัปโหลดไฟล์ Excel เพื่อแสดงข้อมูลบนแผนที่ โดยระบบจะหาคอลัมน์ที่ระบุจังหวัด (เช่น province_of_onset)</p>
+            </div>
+            
+            <div class="space-y-6">
+                <div class="bg-white rounded-xl shadow-md p-4">
+                    <h2 class="text-xl font-semibold mb-4 text-gray-700">10 จังหวัดพบผู้ติดเชื้อสูงสุด</h2>
+                    <div class="relative h-64">
+                        <canvas id="topProvincesChart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-4">
+                    <h2 class="text-xl font-semibold mb-4 text-gray-700">สัดส่วนเพศ</h2>
+                    <div class="relative h-48 w-full flex justify-center">
+                        <canvas id="genderChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // กำหนดตัวแปรหลัก
+        let map;
+        let geojson;
+        let provinceData = {}; // เก็บข้อมูล { 'ชื่อจังหวัด': จำนวนเคส }
+        let topProvincesChartInstance = null;
+        let genderChartInstance = null;
+        let thGeoJsonData = null;
+
+        // รายชื่อจังหวัดภาษาไทย (สำหรับ mapping เผื่อกรณีข้อมูลไม่ตรง)
+        const thaiProvinces = [
+            "กรุงเทพมหานคร", "สมุทรปราการ", "นนทบุรี", "ปทุมธานี", "พระนครศรีอยุธยา", "อ่างทอง", "ลพบุรี", "สิงห์บุรี", "ชัยนาท", "สระบุรี", "ชลบุรี", "ระยอง", "จันทบุรี", "ตราด", "ฉะเชิงเทรา", "ปราจีนบุรี", "นครนายก", "สระแก้ว", "นครราชสีมา", "บุรีรัมย์", "สุรินทร์", "ศรีสะเกษ", "อุบลราชธานี", "ยโสธร", "ชัยภูมิ", "อำนาจเจริญ", "หนองบัวลำภู", "ขอนแก่น", "อุดรธานี", "เลย", "หนองคาย", "มหาสารคาม", "ร้อยเอ็ด", "กาฬสินธุ์", "สกลนคร", "นครพนม", "มุกดาหาร", "เชียงใหม่", "ลำพูน", "ลำปาง", "อุตรดิตถ์", "แพร่", "น่าน", "พะเยา", "เชียงราย", "แม่ฮ่องสอน", "นครสวรรค์", "อุทัยธานี", "กำแพงเพชร", "ตาก", "สุโขทัย", "พิษณุโลก", "พิจิตร", "เพชรบูรณ์", "ราชบุรี", "กาญจนบุรี", "สุพรรณบุรี", "นครปฐม", "สมุทรสาคร", "สมุทรสงคราม", "เพชรบุรี", "ประจวบคีรีขันธ์", "นครศรีธรรมราช", "กระบี่", "พังงา", "ภูเก็ต", "สุราษฎร์ธานี", "ระนอง", "ชุมพร", "สงขลา", "สตูล", "ตรัง", "พัทลุง", "ปัตตานี", "ยะลา", "นราธิวาส", "บึงกาฬ"
+        ];
+
+        // เริ่มต้นสร้างแผนที่
+        function initMap() {
+            // ศูนย์กลางแผนที่ประเทศไทย
+            map = L.map('map').setView([13.736717, 100.523186], 5);
+
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+
+            // โหลด GeoJSON ขอบเขตจังหวัดประเทศไทย
+            // ใช้ข้อมูลจาก raw.githubusercontent.com เป็นสาธารณะ
+            fetch('https://raw.githubusercontent.com/apisit/thailand.json/master/thailand.json')
+                .then(response => response.json())
+                .then(data => {
+                    thGeoJsonData = data;
+                    renderMapData({}); // วาดแผนที่เปล่าๆ ก่อน
+                })
+                .catch(error => console.error('Error loading GeoJSON:', error));
+        }
+
+        // ฟังก์ชันกำหนดสีตามจำนวนเคส (Choropleth)
+        function getColor(d, maxCases) {
+            // ปรับ Scale สีตามข้อมูลจริงแบบไดนามิก
+            if (maxCases === 0 || !d) return '#FFEDA0';
+            let ratio = d / maxCases;
+            
+            return ratio > 0.8  ? '#800026' :
+                   ratio > 0.6  ? '#BD0026' :
+                   ratio > 0.4  ? '#E31A1C' :
+                   ratio > 0.2  ? '#FC4E2A' :
+                   ratio > 0.1  ? '#FD8D3C' :
+                   ratio > 0.05 ? '#FEB24C' :
+                   ratio > 0.01 ? '#FED976' :
+                                  '#FFEDA0';
+        }
+
+        function style(feature) {
+            // ชื่อจังหวัดใน GeoJSON (มักจะเก็บใน properties.name หรือ properties.pro_th)
+            let provName = feature.properties.name || feature.properties.pro_th || feature.properties.NAME_1;
+            
+            // Clean ชื่อจังหวัดเพื่อ matching
+            if(provName) {
+                provName = provName.replace('จ.', '').replace('จังหวัด', '').trim();
+            }
+
+            let cases = provinceData[provName] || 0;
+            
+            // หาค่า Max เพื่อทำ Scale สี
+            let maxCases = 0;
+            for (let p in provinceData) {
+                if (provinceData[p] > maxCases) maxCases = provinceData[p];
+            }
+
+            return {
+                fillColor: getColor(cases, maxCases),
+                weight: 1,
+                opacity: 1,
+                color: 'white',
+                dashArray: '3',
+                fillOpacity: 0.8
+            };
+        }
+
+        function highlightFeature(e) {
+            var layer = e.target;
+            layer.setStyle({
+                weight: 3,
+                color: '#666',
+                dashArray: '',
+                fillOpacity: 0.9
+            });
+            layer.bringToFront();
+            info.update(layer.feature.properties);
+        }
+
+        function resetHighlight(e) {
+            geojson.resetStyle(e.target);
+            info.update();
+        }
+
+        function onEachFeature(feature, layer) {
+            layer.on({
+                mouseover: highlightFeature,
+                mouseout: resetHighlight
+            });
+        }
+
+        // คอนโทรลแสดงข้อมูลเมื่อเอาเมาส์ชี้
+        var info = L.control();
+
+        info.onAdd = function (map) {
+            this._div = L.DomUtil.create('div', 'info'); 
+            this.update();
+            return this._div;
+        };
+
+        info.update = function (props) {
+            let provName = props ? (props.name || props.pro_th || props.NAME_1) : null;
+            if(provName) provName = provName.replace('จ.', '').replace('จังหวัด', '').trim();
+            let cases = provName ? (provinceData[provName] || 0) : 0;
+            
+            this._div.innerHTML = '<h4>ผู้ติดเชื้อรายจังหวัด</h4>' +  (props ?
+                '<b>' + provName + '</b><br />' + cases.toLocaleString() + ' ราย'
+                : 'เลื่อนเมาส์ไปที่จังหวัด');
+        };
+
+        function renderMapData(dataObj) {
+            provinceData = dataObj;
+            
+            if (geojson) {
+                map.removeLayer(geojson);
+            }
+            if(info) {
+               map.removeControl(info); 
+            }
+
+            if (thGeoJsonData) {
+                geojson = L.geoJson(thGeoJsonData, {
+                    style: style,
+                    onEachFeature: onEachFeature
+                }).addTo(map);
+                info.addTo(map);
+            }
+        }
+
+        // จัดการเมื่อเลือกไฟล์
+        document.getElementById('excelFile').addEventListener('change', handleFile, false);
+
+        function handleFile(e) {
+            let file = e.target.files[0];
+            if (!file) return;
+
+            // แสดงหน้าจอ Loading
+            document.getElementById('loading').style.display = 'flex';
+
+            let reader = new FileReader();
+            reader.onload = function(e) {
+                let data = new Uint8Array(e.target.result);
+                // ใช้ setTimeout เพื่อให้ UI ได้อัปเดตหน้า loading ก่อนประมวลผลไฟล์ใหญ่
+                setTimeout(() => {
+                    try {
+                        let workbook = XLSX.read(data, {type: 'array'});
+                        let firstSheetName = workbook.SheetNames[0];
+                        let worksheet = workbook.Sheets[firstSheetName];
+                        // แปลงเป็น JSON โดยใช้บรรทัดแรกเป็น Header
+                        let jsonData = XLSX.utils.sheet_to_json(worksheet);
+                        
+                        processData(jsonData);
+                    } catch (error) {
+                        console.error("Error reading Excel:", error);
+                        alert("เกิดข้อผิดพลาดในการอ่านไฟล์ โปรดตรวจสอบว่าเป็นไฟล์ Excel (.xlsx) ที่ถูกต้อง");
+                    } finally {
+                        document.getElementById('loading').style.display = 'none';
+                    }
+                }, 100);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processData(data) {
+            if (!data || data.length === 0) {
+                alert("ไม่พบข้อมูลในไฟล์");
+                return;
+            }
+
+            // หาคอลัมน์ที่เป็นจังหวัด และ เพศ, อายุ
+            // ข้อมูลจาก data.go.th มักจะชื่อคอลัมน์ว่า "province_of_onset", "sex", "age"
+            let keys = Object.keys(data[0]);
+            let provKey = keys.find(k => k.toLowerCase().includes('province') || k === 'จังหวัด' || k === 'Province');
+            let sexKey = keys.find(k => k.toLowerCase() === 'sex' || k === 'เพศ' || k === 'Gender');
+            let ageKey = keys.find(k => k.toLowerCase() === 'age' || k === 'อายุ' || k === 'Age');
+
+            if (!provKey) {
+                // พยายามเดาหาคอลัมน์ที่มีข้อมูลตรงกับชื่อจังหวัด
+                for(let key of keys) {
+                     if(thaiProvinces.includes(String(data[1][key]).trim())) {
+                         provKey = key;
+                         break;
+                     }
+                }
+            }
+
+            if (!provKey) {
+                alert("ไม่พบคอลัมน์ที่ระบุ 'จังหวัด' (เช่น province_of_onset) ในไฟล์ข้อมูลของคุณ");
+                return;
+            }
+
+            let provCounts = {};
+            let sexCounts = {};
+            let totalAge = 0;
+            let validAgeCount = 0;
+
+            // นับข้อมูล
+            data.forEach(row => {
+                // จังหวัด
+                let p = row[provKey];
+                if (p) {
+                    let pClean = String(p).trim().replace('จ.', '').replace('จังหวัด', '');
+                    // จัดกลุ่ม "กทม" "กทม."
+                    if(pClean.includes('กรุงเทพ') || pClean === 'กทม' || pClean === 'กทม.') pClean = 'กรุงเทพมหานคร';
+                    
+                    if(provCounts[pClean]) {
+                        provCounts[pClean]++;
+                    } else {
+                        provCounts[pClean] = 1;
+                    }
+                }
+
+                // เพศ
+                if (sexKey && row[sexKey]) {
+                    let s = String(row[sexKey]).trim();
+                    // จัดกลุ่ม ชาย หญิง
+                    if (s === 'ชาย' || s.toLowerCase() === 'male' || s === 'M') s = 'ชาย';
+                    else if (s === 'หญิง' || s.toLowerCase() === 'female' || s === 'F') s = 'หญิง';
+                    else s = 'ไม่ระบุ/อื่นๆ';
+
+                    sexCounts[s] = (sexCounts[s] || 0) + 1;
+                }
+
+                // อายุ
+                if (ageKey && row[ageKey]) {
+                    let a = parseFloat(row[ageKey]);
+                    if (!isNaN(a)) {
+                        totalAge += a;
+                        validAgeCount++;
+                    }
+                }
+            });
+
+            // อัปเดต Dashboard
+            updateDashboard(data.length, provCounts, sexCounts, totalAge, validAgeCount);
+        }
+
+        function updateDashboard(totalCases, provCounts, sexCounts, totalAge, validAgeCount) {
+            // อัปเดตตัวเลข
+            document.getElementById('total-cases').innerText = totalCases.toLocaleString();
+
+            // หาจังหวัดสูงสุด
+            let maxProv = '';
+            let maxCount = 0;
+            let sortableProvinces = [];
+            for (let p in provCounts) {
+                sortableProvinces.push([p, provCounts[p]]);
+                if (provCounts[p] > maxCount) {
+                    maxCount = provCounts[p];
+                    maxProv = p;
+                }
+            }
+            
+            if (maxProv) {
+                document.getElementById('max-province').innerText = maxProv;
+                document.getElementById('max-province-cases').innerText = `${maxCount.toLocaleString()} ราย`;
+            }
+
+            // อายุเฉลี่ย
+            if (validAgeCount > 0) {
+                let avg = (totalAge / validAgeCount).toFixed(1);
+                document.getElementById('avg-age').innerText = `${avg} ปี`;
+            } else {
+                document.getElementById('avg-age').innerText = 'ไม่พบข้อมูล';
+            }
+
+            // วาดแผนที่ใหม่
+            renderMapData(provCounts);
+
+            // วาดกราฟ
+            sortableProvinces.sort((a, b) => b[1] - a[1]); // เรียงจากมากไปน้อย
+            let top10 = sortableProvinces.slice(0, 10);
+            renderBarChart(top10);
+            
+            if (Object.keys(sexCounts).length > 0) {
+                renderPieChart(sexCounts);
+            }
+        }
+
+        function renderBarChart(topData) {
+            let labels = topData.map(item => item[0]);
+            let data = topData.map(item => item[1]);
+
+            let ctx = document.getElementById('topProvincesChart').getContext('2d');
+            
+            if (topProvincesChartInstance) {
+                topProvincesChartInstance.destroy();
+            }
+
+            topProvincesChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'จำนวนผู้ติดเชื้อ',
+                        data: data,
+                        backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                        borderColor: 'rgb(59, 130, 246)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderPieChart(sexData) {
+            let labels = Object.keys(sexData);
+            let data = Object.values(sexData);
+
+            let ctx = document.getElementById('genderChart').getContext('2d');
+            
+            if (genderChartInstance) {
+                genderChartInstance.destroy();
+            }
+
+            // กำหนดสี: ชาย=ฟ้า, หญิง=ชมพู/แดง, อื่นๆ=เทา
+            let bgColors = labels.map(l => {
+                if(l === 'ชาย') return 'rgba(54, 162, 235, 0.8)';
+                if(l === 'หญิง') return 'rgba(255, 99, 132, 0.8)';
+                return 'rgba(201, 203, 207, 0.8)';
+            });
+
+            genderChartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: bgColors,
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        }
+                    }
+                }
+            });
+        }
+
+        // เริ่มต้นการทำงานเมื่อโหลดหน้าเสร็จ
+        window.onload = function() {
+            initMap();
+        };
+
+    </script>
+</body>
+</html>
